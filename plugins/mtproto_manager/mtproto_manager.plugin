@@ -1,0 +1,192 @@
+# -*- coding: utf-8 -*-
+import html
+import json
+import re
+import socket
+import threading
+import time
+from typing import Any, List
+from urllib.parse import unquote
+
+import requests
+from base_plugin import BasePlugin
+from ui.settings import Header, Text, Divider, Input
+
+__id__ = "mtproto_manager"
+__name__ = "MTProto Auto Manager"
+__description__ = "Сбор, проверка и ротация MTProto-прокси из публичных каналов"
+__author__ = "@dimkkq"
+__version__ = "1.2.0"
+__icon__ = "exteraPlugins/1"
+__app_version__ = ">=12.5.1"
+__sdk_version__ = ">=1.4.4.3"
+__category__ = "tools"
+
+TIMEOUT_SEC = 3
+MAX_WORKERS = 10
+MAX_PROXIES = 80
+
+DEFAULT_SOURCES = (
+    "https://t.me/s/ProxyMTProto\n"
+    "https://t.me/s/TProxyRU"
+)
+
+LINK_RE = re.compile(
+    r'(?:tg://|https?://t\.me/)proxy\?([^"\'\s<>&][^"\'\s<]*)',
+    re.IGNORECASE
+)
+
+POST_TEXT_RE = re.compile(
+    r'Server:\s*([^\s]+)\s+Port:\s*(\d+)\s+Secret:\s*([^\s@]+)',
+    re.IGNORECASE
+)
+
+class MTProtoManagerPlugin(BasePlugin):
+    def on_plugin_load(self):
+        self.logger.info("MTProto Manager loaded")
+
+    def _sources(self):
+        raw = self.get_setting("sources", DEFAULT_SOURCES) or ""
+        return [s.strip() for s in raw.splitlines()
+                if s.strip().startswith("http")]
+
+    def _parse_link_query(self, query):
+        from urllib.parse import parse_qs
+        q = parse_qs(query, keep_blank_values=True)
+        server = (q.get("server") or [""])[0].strip()
+        port = (q.get("port") or [""])[0].strip()
+        secret = unquote((q.get("secret") or [""])[0].strip())
+        if server and port.isdigit() and secret:
+            return server, port, secret
+        return None
+
+    def _fetch_raw(self):
+        found = []
+        for url in self._sources():
+            try:
+                r = requests.get(url, timeout=12)
+                r.raise_for_status()
+                raw_html = r.text
+
+                # Метод 1: сырые ссылки
+                for m in LINK_RE.finditer(raw_html):
+                    parsed = self._parse_link_query(m.group(1))
+                    if parsed:
+                        found.append(parsed)
+
+                # Метод 2: Server/Port/Secret в тексте
+                clean = re.sub(r'<[^>]+>', ' ', raw_html)
+                clean = html.unescape(clean)
+                for m in POST_TEXT_RE.finditer(clean):
+                    server, port, secret = m.groups()
+                    server = unquote(server.strip())
+                    secret = unquote(secret.strip())
+                    if server and port.isdigit() and secret:
+                        found.append((server, port, secret))
+
+                self.logger.info(f"Источник {url}: найдено = {len(found)}")
+            except Exception as e:
+                self.logger.info(f"Источник недоступен {url}: {e}")
+
+        uniq = list(dict.fromkeys(found))
+        return uniq[:MAX_PROXIES]
+
+    def _tcp_alive(self, host, port):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(TIMEOUT_SEC)
+            ok = s.connect_ex((host, int(port))) == 0
+            s.close()
+            return ok
+        except Exception:
+            return False
+
+    def _check_one(self, server, port, secret, out):
+        if not self._tcp_alive(server, port):
+            return
+        t0 = time.time()
+        if self._tcp_alive(server, port):
+            out.append({
+                "server": server, "port": port, "secret": secret,
+                "latency": round((time.time() - t0) * 1000, 2),
+                "url": f"tg://proxy?server={server}&port={port}&secret={secret}",
+            })
+
+    def run_check(self, view=None):
+        def worker():
+            try:
+                self.logger.info("Сбор прокси из каналов...")
+                raw = self._fetch_raw()
+                if not raw:
+                    self.logger.info("0 ссылок — проверь источники.")
+                    return
+                out = []
+                threads = []
+                for s, p, sec in raw:
+                    th = threading.Thread(target=self._check_one,
+                                          args=(s, p, sec, out))
+                    threads.append(th); th.start()
+                    if len(threads) >= MAX_WORKERS:
+                        for x in threads: x.join()
+                        threads = []
+                for x in threads: x.join()
+                out.sort(key=lambda x: x["latency"])
+                self.set_setting("cache", json.dumps(out), reload_settings=True)
+                if out:
+                    b = out[0]
+                    self.logger.info(
+                        f"Готово. Живых: {len(out)}. Лучший: "
+                        f"{b['server']}:{b['port']} ({b['latency']} мс)\n{b['url']}"
+                    )
+                else:
+                    self.logger.info("Ссылки есть, но TCP не отвечает.")
+            except Exception:
+                self.logger.exception("run_check failed")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _copy_best(self, view=None):
+        cache = self._cache()
+        if not cache:
+            self.logger.info("Нет сохранённого прокси.")
+            return
+        url = cache[0]["url"]
+        try:
+            from android.content import Context
+            from android.app import Activity
+            from java import jclass
+            ctx = Activity.getCurrentActivity()
+            cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE)
+            clip = jclass("android.content.ClipData").newPlainText("proxy", url)
+            cm.setPrimaryClip(clip)
+            self.logger.info("Скопировано в буфер.")
+        except Exception as e:
+            self.logger.info(f"Авто-копирование недоступно ({e}). URL в логе.")
+
+    def _cache(self):
+        try:
+            return json.loads(self.get_setting("cache", "[]") or "[]")
+        except Exception:
+            return []
+
+    def create_settings(self) -> List[Any]:
+        cache = self._cache()
+        if cache:
+            b = cache[0]
+            status = (f"Живых: {len(cache)}\nЛучший: {b['server']}:{b['port']} "
+                      f"({b['latency']} мс)\n{b['url']}")
+        else:
+            status = "Нет данных. Нажми «Собрать и проверить»."
+        return [
+            Header(text="MTProto Auto Manager"),
+            Input(
+                key="sources",
+                text="Источники (по одному t.me/s/... в строке)",
+                default=DEFAULT_SOURCES,
+                multiline=True,
+                max_length=4000,
+            ),
+            Text(text="Собрать и проверить", icon="msg_refresh", on_click=self.run_check),
+            Text(text="Скопировать лучший прокси", icon="msg_copy", on_click=self._copy_best),
+            Divider(),
+            Text(text=status, icon="msg_info"),
+        ]
