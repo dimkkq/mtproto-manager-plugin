@@ -7,17 +7,17 @@
     {
       "id": "mtproto_manager",
       "name": "MTProto Auto Manager",
-      "description": "Диагностическая версия",
+      "description": "Диагностическая версия v1.5.1",
       "author": "@dimkkq",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "icon": "exteraPlugins/1",
       "app_version": ">=12.5.1",
       "sdk_version": ">=1.4.4.3",
       "category": "tools",
       "file": "plugins/mtproto_manager/mtproto_manager.plugin",
-      "sha256": "22c1c3db11f52f88f9475d9c878cf68a9218be7e5116931f9401653dbfaa64b6",
-      "size": 1179,
-      "updated_at": "2026-11-20T03:09:11Z"
+      "sha256": "c852afff76785ea21c4bf88014b77491d0554ea7a976527258f2c24ec8d5d88a",
+      "size": 1776,
+      "updated_at": "2026-11-20T03:14:01Z"
     }
   ]
 }
