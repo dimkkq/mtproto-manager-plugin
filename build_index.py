@@ -3,6 +3,8 @@ import ast, hashlib, json
 from datetime import datetime, timezone
 from pathlib import Path
 
+#беббеб
+
 ROOT = Path(__file__).resolve().parent
 PLUGINS_DIR = ROOT / "plugins"
 INDEX = ROOT / "extera-plugins.json"
