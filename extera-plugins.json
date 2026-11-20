@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "name": "MTProto Manager",
+  "author": "@dimkkq",
+  "homepage": "https://github.com/dimkkq/mtproto-manager-plugin",
+  "plugins": [
+    {
+      "id": "mtproto_manager",
+      "name": "MTProto Auto Manager",
+      "description": "Сбор, проверка и ротация MTProto-прокси из публичных каналов",
+      "author": "@dimkkq",
+      "version": "1.2.0",
+      "icon": "exteraPlugins/1",
+      "app_version": ">=12.5.1",
+      "sdk_version": ">=1.4.4.3",
+      "category": "tools",
+      "file": "plugins/mtproto_manager/mtproto_manager.plugin",
+      "sha256": "17ded1c80f5cea8f204a82f672cdf7f5f27c5b28f9151c42171b8f907a6ee4c0",
+      "size": 7161,
+      "updated_at": "2026-11-20T02:18:51Z"
+    }
+  ]
+}
