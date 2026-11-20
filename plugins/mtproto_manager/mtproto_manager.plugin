@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
+import html as html_mod
 import json
 import re
 import socket
 import threading
 import time
 from typing import Any, List
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote
 
 import requests
 from base_plugin import BasePlugin
-from ui.settings import Header, Text, Divider, Input
 
 __id__ = "mtproto_manager"
 __name__ = "MTProto Auto Manager"
 __description__ = "Сбор, проверка и ротация MTProto-прокси из публичных каналов"
 __author__ = "@dimkkq"
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 __icon__ = "exteraPlugins/1"
 __app_version__ = ">=12.5.1"
 __sdk_version__ = ">=1.4.4.3"
@@ -44,21 +44,17 @@ class MTProtoManagerPlugin(BasePlugin):
     def __init__(self):
         super().__init__()
         self.working_proxies = []
-        self.status_text = "Нажми «Проверить прокси» для запуска"
-        self.last_error = ""
+        self.status_text = "Нажми «Проверить прокси»"
 
     def on_plugin_load(self):
-        try:
-            self.logger.info("MTProto Manager loaded (v1.3.0)")
-        except Exception:
-            pass
+        self.logger.info("MTProto Manager loaded (v1.3.1)")
 
     def _sources(self):
         raw = self.get_setting("sources", DEFAULT_SOURCES) or ""
-        return [s.strip() for s in raw.splitlines() if s.strip().startswith("http")]
+        return [s.strip() for s in raw.splitlines()
+                if s.strip().startswith("http")]
 
     def _parse_link_query(self, query):
-        from urllib.parse import parse_qs
         q = parse_qs(query, keep_blank_values=True)
         server = (q.get("server") or [""])[0].strip()
         port = (q.get("port") or [""])[0].strip()
@@ -70,28 +66,23 @@ class MTProtoManagerPlugin(BasePlugin):
     def _fetch_raw(self):
         found = []
         for url in self._sources():
-            try:
-                r = requests.get(url, timeout=TIMEOUT_SEC)
-                r.raise_for_status()
-                raw_html = r.text
+            r = requests.get(url, timeout=TIMEOUT_SEC)
+            r.raise_for_status()
+            raw_html = r.text
 
-                for m in LINK_RE.finditer(raw_html):
-                    parsed = self._parse_link_query(m.group(1))
-                    if parsed:
-                        found.append(parsed)
+            for m in LINK_RE.finditer(raw_html):
+                parsed = self._parse_link_query(m.group(1))
+                if parsed:
+                    found.append(parsed)
 
-                import html as html_mod
-                clean = re.sub(r'<[^>]+>', ' ', raw_html)
-                clean = html_mod.unescape(clean)
-                for m in POST_TEXT_RE.finditer(clean):
-                    server, port, secret = m.groups()
-                    server = unquote(server.strip())
-                    secret = unquote(secret.strip())
-                    if server and port.isdigit() and secret:
-                        found.append((server, port, secret))
-            except Exception as e:
-                self.last_error = f"Ошибка загрузки {url}: {type(e).__name__}: {e}"
-                raise
+            clean = re.sub(r'<[^>]+>', ' ', raw_html)
+            clean = html_mod.unescape(clean)
+            for m in POST_TEXT_RE.finditer(clean):
+                server, port, secret = m.groups()
+                server = unquote(server.strip())
+                secret = unquote(secret.strip())
+                if server and port.isdigit() and secret:
+                    found.append((server, port, secret))
         return list(dict.fromkeys(found))[:MAX_PROXIES]
 
     def _tcp_alive(self, host, port):
@@ -119,16 +110,19 @@ class MTProtoManagerPlugin(BasePlugin):
         def worker():
             try:
                 self.status_text = "Сбор прокси из каналов..."
+                self._refresh()
                 raw = self._fetch_raw()
                 if not raw:
-                    self.status_text = "0 ссылок найдено. Каналы не отдают сырые ссылки в веб-вью."
+                    self.status_text = "0 ссылок. Источники не отдают ссылки в HTML."
+                    self._refresh()
                     return
-
-                self.status_text = f"Найдено {len(raw)} ссылок. Проверяю TCP..."
+                self.status_text = f"Найдено {len(raw)}. Проверяю TCP..."
+                self._refresh()
                 out = []
                 threads = []
                 for s, p, sec in raw:
-                    th = threading.Thread(target=self._check_one, args=(s, p, sec, out))
+                    th = threading.Thread(target=self._check_one,
+                                          args=(s, p, sec, out))
                     threads.append(th); th.start()
                     if len(threads) >= MAX_WORKERS:
                         for x in threads: x.join()
@@ -136,36 +130,26 @@ class MTProtoManagerPlugin(BasePlugin):
                 for x in threads: x.join()
                 out.sort(key=lambda x: x["latency"])
                 self.working_proxies = out
-                self.set_setting("cache", json.dumps(out), reload_settings=True)
-
+                self.set_setting("cache", json.dumps(out))
                 if out:
                     b = out[0]
-                    self.status_text = (f"Живых: {len(out)}\n"
-                                        f"Лучший: {b['server']}:{b['port']} "
+                    self.status_text = (f"Живых: {len(out)}. Лучший: "
+                                        f"{b['server']}:{b['port']} "
                                         f"({b['latency']} мс)\n{b['url']}")
                 else:
-                    self.status_text = f"Ссылки есть ({len(raw)}), но ни одна не отвечает на TCP."
+                    self.status_text = f"Ссылок {len(raw)}, но TCP не отвечает ни у одной."
             except Exception as e:
                 self.status_text = f"ОШИБКА: {type(e).__name__}: {e}"
-                self.last_error = str(e)
             finally:
-                try:
-                    self.reload_settings()
-                except Exception:
-                    pass
-
+                self._refresh()
         threading.Thread(target=worker, daemon=True).start()
 
     def _copy_best(self, *args, **kwargs):
-        cache = self.working_proxies
-        if not cache:
-            self.status_text = "Нет сохранённого прокси. Сначала запусти проверку."
-            try:
-                self.reload_settings()
-            except Exception:
-                pass
+        if not self.working_proxies:
+            self.status_text = "Нет данных. Сначала «Проверить прокси»."
+            self._refresh()
             return
-        url = cache[0]["url"]
+        url = self.working_proxies[0]["url"]
         try:
             from android.content import Context
             from android.app import Activity
@@ -174,26 +158,45 @@ class MTProtoManagerPlugin(BasePlugin):
             cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE)
             clip = jclass("android.content.ClipData").newPlainText("proxy", url)
             cm.setPrimaryClip(clip)
-            self.status_text = f"Скопировано: {url}"
+            self.status_text = f"Скопировано.\n{url}"
         except Exception as e:
-            self.status_text = f"Авто-копирование недоступно ({type(e).__name__}). URL: {url}"
+            self.status_text = f"Копирование недоступно ({type(e).__name__}).\n{url}"
+        self._refresh()
+
+    def _refresh(self):
         try:
             self.reload_settings()
         except Exception:
             pass
 
     def create_settings(self) -> List[Any]:
-        return [
-            Header(text="MTProto Auto Manager v1.3.0"),
-            Input(
+        try:
+            from ui.settings import Header, Text, Divider
+        except Exception as e:
+            self.logger.exception(f"ui.settings import failed: {e}")
+            return []
+
+        items = [Header(text="MTProto Auto Manager v1.3.1")]
+
+        # Input пробуем изолированно: если его нет в SDK — не роняем весь экран
+        try:
+            from ui.settings import Input
+            items.append(Input(
                 key="sources",
-                text="Источники (по одному t.me/s/... в строке)",
+                text="Источники (t.me/s/... построчно)",
                 default=DEFAULT_SOURCES,
-                multiline=True,
-                max_length=4000,
-            ),
-            Text(text="Проверить прокси", icon="msg_refresh", on_click=self.run_check),
-            Text(text="Скопировать лучший прокси", icon="msg_copy", on_click=self._copy_best),
-            Divider(),
-            Text(text=self.status_text, icon="msg_info"),
-        ]
+            ))
+        except Exception as e:
+            items.append(Text(
+                text=f"Поле ввода недоступно ({type(e).__name__}). "
+                     f"Источники по умолчанию активны.",
+                icon="msg_info",
+            ))
+
+        items.append(Text(text="Проверить прокси", icon="msg_refresh",
+                          on_click=self.run_check))
+        items.append(Text(text="Скопировать лучший", icon="msg_copy",
+                          on_click=self._copy_best))
+        items.append(Divider())
+        items.append(Text(text=self.status_text, icon="msg_info"))
+        return items
