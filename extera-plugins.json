@@ -9,15 +9,15 @@
       "name": "MTProto Auto Manager",
       "description": "Сбор, проверка и ротация MTProto-прокси из публичных каналов",
       "author": "@dimkkq",
-      "version": "1.3.2",
+      "version": "1.4.0",
       "icon": "exteraPlugins/1",
       "app_version": ">=12.5.1",
       "sdk_version": ">=1.4.4.3",
       "category": "tools",
       "file": "plugins/mtproto_manager/mtproto_manager.plugin",
-      "sha256": "f4c13353fc2fa024528bfa7b53cf3df78560c28a2b45b6ed7cb4cded52c74d92",
-      "size": 7106,
-      "updated_at": "2026-11-20T02:52:59Z"
+      "sha256": "e41455927a9c9590433d82bd90e5e80aa554b8aff1cce0860af4ac8645f3bedb",
+      "size": 6562,
+      "updated_at": "2026-11-20T03:00:13Z"
     }
   ]
 }
