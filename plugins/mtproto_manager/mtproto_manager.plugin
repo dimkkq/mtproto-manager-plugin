@@ -1,48 +1,197 @@
 # -*- coding: utf-8 -*-
+import json
+import re
+import socket
+import threading
+import time
+from typing import Any, List
+from urllib.parse import unquote
+
+import requests
 from base_plugin import BasePlugin
+from android_utils import log, run_on_ui_thread
+from ui.settings import Header, Text, Divider, Input
 
 __id__ = "mtproto_manager"
 __name__ = "MTProto Auto Manager"
-__description__ = "Диагностическая версия v1.5.1"
+__description__ = "Сбор, проверка и ротация MTProto-прокси из публичных каналов"
 __author__ = "@dimkkq"
-__version__ = "1.5.1"
+__version__ = "2.0.0"
 __icon__ = "exteraPlugins/1"
 __app_version__ = ">=12.5.1"
 __sdk_version__ = ">=1.4.4.3"
 __category__ = "tools"
 
+TIMEOUT_SEC = 5
+MAX_WORKERS = 5
+MAX_PROXIES = 30
+
+DEFAULT_SOURCES = (
+    "https://t.me/s/ProxyMTProto\n"
+    "https://t.me/s/TProxyRU"
+)
+
+LINK_RE = re.compile(
+    r'(?:tg://|https?://t\.me/)proxy\?([^"\'\s<>&][^"\'\s<]*)',
+    re.IGNORECASE
+)
+
+POST_TEXT_RE = re.compile(
+    r'Server:\s*([^\s]+)\s+Port:\s*(\d+)\s+Secret:\s*([^\s@]+)',
+    re.IGNORECASE
+)
+
 class MTProtoManagerPlugin(BasePlugin):
     def __init__(self):
         super().__init__()
-        self.status_text = "Статус: ожидание"
+        self.working_proxies = []
+        self.status_text = "Нажми «Проверить прокси»"
 
     def on_plugin_load(self):
-        print("=== MTProto Manager v1.5.1 ЗАГРУЖЕН ===")
-        try:
-            self.logger.info("MTProto Manager v1.5.1 loaded")
-        except Exception as e:
-            print(f"logger failed: {e}")
+        log("MTProto Manager v2.0.0 loaded")
 
-    def _on_test(self, view=None):
-        print("=== КНОПКА НАЖАТА ===")
-        try:
-            self.logger.info("Кнопка нажата!")
-        except Exception as e:
-            print(f"logger failed: {e}")
-        self.status_text = "Кнопка нажата!"
-        try:
-            self.reload_settings()
-            print("reload_settings вызван")
-        except Exception as e:
-            print(f"reload_settings failed: {e}")
+    def _sources(self):
+        raw = self.get_setting("sources", DEFAULT_SOURCES) or ""
+        return [s.strip() for s in raw.splitlines()
+                if s.strip().startswith("http")]
 
-    def create_settings(self):
-        print("create_settings вызван")
-        from ui.settings import Header, Text, Divider
+    def _parse_link_query(self, query):
+        from urllib.parse import parse_qs
+        q = parse_qs(query, keep_blank_values=True)
+        server = (q.get("server") or [""])[0].strip()
+        port = (q.get("port") or [""])[0].strip()
+        secret = unquote((q.get("secret") or [""])[0].strip())
+        if server and port.isdigit() and secret:
+            return server, port, secret
+        return None
+
+    def _fetch_raw(self):
+        import html as html_mod
+        found = []
+        for url in self._sources():
+            try:
+                r = requests.get(url, timeout=TIMEOUT_SEC)
+                r.raise_for_status()
+                raw_html = r.text
+
+                for m in LINK_RE.finditer(raw_html):
+                    parsed = self._parse_link_query(m.group(1))
+                    if parsed:
+                        found.append(parsed)
+
+                clean = re.sub(r'<[^>]+>', ' ', raw_html)
+                clean = html_mod.unescape(clean)
+                for m in POST_TEXT_RE.finditer(clean):
+                    server, port, secret = m.groups()
+                    server = unquote(server.strip())
+                    secret = unquote(secret.strip())
+                    if server and port.isdigit() and secret:
+                        found.append((server, port, secret))
+
+                log(f"Источник {url}: найдено {len(found)}")
+            except Exception as e:
+                log(f"Источник недоступен {url}: {e}")
+        return list(dict.fromkeys(found))[:MAX_PROXIES]
+
+    def _tcp_alive(self, host, port):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(TIMEOUT_SEC)
+            ok = s.connect_ex((host, int(port))) == 0
+            s.close()
+            return ok
+        except Exception:
+            return False
+
+    def _check_one(self, server, port, secret, out):
+        if not self._tcp_alive(server, port):
+            return
+        t0 = time.time()
+        if self._tcp_alive(server, port):
+            out.append({
+                "server": server, "port": port, "secret": secret,
+                "latency": round((time.time() - t0) * 1000, 2),
+                "url": f"tg://proxy?server={server}&port={port}&secret={secret}",
+            })
+
+    def _run_check_task(self):
+        """Фоновая задача проверки"""
+        try:
+            self.status_text = "Сбор прокси..."
+            run_on_ui_thread(self.reload_settings)
+            
+            raw = self._fetch_raw()
+            if not raw:
+                self.status_text = "0 ссылок. Каналы не отдают ссылки в HTML."
+                run_on_ui_thread(self.reload_settings)
+                return
+            
+            self.status_text = f"Найдено {len(raw)}. Проверяю TCP..."
+            run_on_ui_thread(self.reload_settings)
+            
+            out = []
+            threads = []
+            for s, p, sec in raw:
+                th = threading.Thread(target=self._check_one, args=(s, p, sec, out))
+                threads.append(th)
+                th.start()
+                if len(threads) >= MAX_WORKERS:
+                    for x in threads:
+                        x.join()
+                    threads = []
+            for x in threads:
+                x.join()
+            
+            out.sort(key=lambda x: x["latency"])
+            self.working_proxies = out
+            self.set_setting("cache", json.dumps(out))
+            
+            if out:
+                b = out[0]
+                self.status_text = f"Живых: {len(out)}. Лучший: {b['server']}:{b['port']} ({b['latency']} мс)\n{b['url']}"
+            else:
+                self.status_text = f"Ссылок {len(raw)}, но TCP не отвечает."
+        except Exception as e:
+            self.status_text = f"ОШИБКА: {type(e).__name__}: {e}"
+        finally:
+            run_on_ui_thread(self.reload_settings)
+
+    def _on_check_click(self, v):
+        """Обработчик кнопки проверки"""
+        log("Кнопка 'Проверить прокси' нажата")
+        threading.Thread(target=self._run_check_task, daemon=True).start()
+
+    def _on_copy_click(self, v):
+        """Обработчик кнопки копирования"""
+        if not self.working_proxies:
+            self.status_text = "Нет данных. Сначала «Проверить прокси»."
+            run_on_ui_thread(self.reload_settings)
+            return
+        
+        url = self.working_proxies[0]["url"]
+        try:
+            from android.content import Context
+            from android.app import Activity
+            from java import jclass
+            ctx = Activity.getCurrentActivity()
+            cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE)
+            clip = jclass("android.content.ClipData").newPlainText("proxy", url)
+            cm.setPrimaryClip(clip)
+            self.status_text = f"Скопировано.\n{url}"
+        except Exception as e:
+            self.status_text = f"Копирование недоступно ({type(e).__name__}).\n{url}"
+        run_on_ui_thread(self.reload_settings)
+
+    def create_settings(self) -> List[Any]:
         return [
-            Header(text="MTProto Manager v1.5.1 (диагностика)"),
-            Text(text="Если ты видишь этот экран — импорт работает", icon="msg_info"),
-            Text(text="Нажми «Тест» для проверки on_click", icon="msg_refresh", on_click=self._on_test),
+            Header(text="MTProto Auto Manager v2.0.0"),
+            Input(
+                key="sources",
+                text="Источники (t.me/s/... построчно)",
+                default=DEFAULT_SOURCES,
+            ),
+            Text(text="Проверить прокси", icon="msg_refresh", on_click=self._on_check_click),
+            Text(text="Скопировать лучший", icon="msg_copy", on_click=self._on_copy_click),
             Divider(),
             Text(text=self.status_text, icon="msg_info"),
         ]
