@@ -1,0 +1,7 @@
+{
+  "name": "MTProto Auto Manager",
+  "version": "1.0.0",
+  "description": "Автоматический поиск и проверка MTProto прокси",
+  "author": "User",
+  "min_sdk_version": "1.4.0"
+}
