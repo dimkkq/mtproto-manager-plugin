@@ -3,28 +3,46 @@ from base_plugin import BasePlugin
 
 __id__ = "mtproto_manager"
 __name__ = "MTProto Auto Manager"
-__description__ = "Диагностическая версия"
+__description__ = "Диагностическая версия v1.5.1"
 __author__ = "@dimkkq"
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 __icon__ = "exteraPlugins/1"
 __app_version__ = ">=12.5.1"
 __sdk_version__ = ">=1.4.4.3"
 __category__ = "tools"
 
 class MTProtoManagerPlugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.status_text = "Статус: ожидание"
+
     def on_plugin_load(self):
-        self.logger.info("=== MTProto Manager v1.5.0 ЗАГРУЖЕН ===")
+        print("=== MTProto Manager v1.5.1 ЗАГРУЖЕН ===")
+        try:
+            self.logger.info("MTProto Manager v1.5.1 loaded")
+        except Exception as e:
+            print(f"logger failed: {e}")
+
+    def _on_test(self, view=None):
+        print("=== КНОПКА НАЖАТА ===")
+        try:
+            self.logger.info("Кнопка нажата!")
+        except Exception as e:
+            print(f"logger failed: {e}")
+        self.status_text = "Кнопка нажата!"
+        try:
+            self.reload_settings()
+            print("reload_settings вызван")
+        except Exception as e:
+            print(f"reload_settings failed: {e}")
 
     def create_settings(self):
-        self.logger.info("create_settings вызван")
+        print("create_settings вызван")
         from ui.settings import Header, Text, Divider
         return [
-            Header(text="MTProto Manager v1.5.0 (диагностика)"),
+            Header(text="MTProto Manager v1.5.1 (диагностика)"),
             Text(text="Если ты видишь этот экран — импорт работает", icon="msg_info"),
             Text(text="Нажми «Тест» для проверки on_click", icon="msg_refresh", on_click=self._on_test),
             Divider(),
-            Text(text="Статус: ожидание", icon="msg_info"),
+            Text(text=self.status_text, icon="msg_info"),
         ]
-
-    def _on_test(self, *args, **kwargs):
-        self.logger.info("Кнопка нажата!")
