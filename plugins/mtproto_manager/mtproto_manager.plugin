@@ -16,7 +16,7 @@ __id__ = "mtproto_manager"
 __name__ = "MTProto Auto Manager"
 __description__ = "Сбор, проверка и ротация MTProto-прокси из публичных каналов"
 __author__ = "@dimkkq"
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 __icon__ = "exteraPlugins/1"
 __app_version__ = ">=12.5.1"
 __sdk_version__ = ">=1.4.4.3"
@@ -48,7 +48,7 @@ class MTProtoManagerPlugin(BasePlugin):
         self.status_text = "Нажми «Проверить прокси»"
 
     def on_plugin_load(self):
-        log("MTProto Manager v2.0.0 loaded")
+        log("MTProto Manager v3.0.0 loaded")
 
     def _sources(self):
         raw = self.get_setting("sources", DEFAULT_SOURCES) or ""
@@ -157,7 +157,7 @@ class MTProtoManagerPlugin(BasePlugin):
             run_on_ui_thread(self.reload_settings)
 
     def _on_check_click(self, v):
-        """Обработчик кнопки проверки"""
+        """Обработчик кнопки проверки — сигнатура как в exitfy"""
         log("Кнопка 'Проверить прокси' нажата")
         threading.Thread(target=self._run_check_task, daemon=True).start()
 
@@ -184,14 +184,14 @@ class MTProtoManagerPlugin(BasePlugin):
 
     def create_settings(self) -> List[Any]:
         return [
-            Header(text="MTProto Auto Manager v2.0.0"),
+            Header(text="MTProto Auto Manager v3.0.0"),
             Input(
                 key="sources",
                 text="Источники (t.me/s/... построчно)",
                 default=DEFAULT_SOURCES,
             ),
-            Text(text="Проверить прокси", icon="msg_refresh", on_click=self._on_check_click),
-            Text(text="Скопировать лучший", icon="msg_copy", on_click=self._on_copy_click),
+            Text(text="Проверить прокси", icon="msg_refresh", on_click=lambda v: self._on_check_click(v)),
+            Text(text="Скопировать лучший", icon="msg_copy", on_click=lambda v: self._on_copy_click(v)),
             Divider(),
             Text(text=self.status_text, icon="msg_info"),
         ]
